@@ -1,0 +1,42 @@
+{%- include "helpers.jinja" -%}
+
+{%- if added %}
+
+## Added:
+    {%- for added in added %}
+- [ ] {{ cratesio(added.ident) }} {{ because(added.reasons) }}{{ builddebug(added) }}
+    {%- endfor -%}
+{%- endif -%}
+{%- if changed %}
+
+## Updated:
+    {%- for comparison in changed -%}
+        {%- if comparison.ident not in major_updates -%}
+            {{ change(comparison) }}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endif -%}
+{%- if removed %}
+
+## Removed:
+    {%- for removed in removed %}
+- {{ cratesio(removed.ident) }}
+        {%- if removed.remaining_versions -%}
+            , version(s) {{ removed.remaining_versions | join(", ") }} remain(s)
+        {%- endif -%}
+    {%- endfor -%}
+{%- endif -%}
+{%- if filtered_added %}
+
+## Added outside of relevant platforms:
+    {%- for added in filtered_added %}
+- {{ cratesio(added) }}
+    {%- endfor -%}
+{%- endif -%}
+{%- if filtered_removed %}
+
+## Removed outside of relevant platforms:
+    {%- for removed in filtered_removed %}
+- {{ cratesio(removed) }}
+    {%- endfor -%}
+{%- endif -%}

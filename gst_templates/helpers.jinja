@@ -1,0 +1,62 @@
+{% macro because(reasons) -%}
+(because of{{ " " }}
+{%- for reason in reasons -%}
+    {%- if not loop.first -%}
+        , and others
+        {%- break -%}
+    {%- endif -%}
+
+    `{{ reason }}` on `{{ reasons[reason] | map("short_platform") | join("/") }}`
+{%- endfor -%}
+)
+{%- endmacro -%}
+
+{%- macro builddebug(item) -%}
+{%- if item.has_build_rs -%}
+, has `build.rs`
+{%- endif -%}
+{%- if item.is_proc_macro -%}
+, is a proc macro
+{%- endif -%}
+{%- if item.kind.run_at_build and not item.kind.run_at_build and not item.added_in_build -%}
+, is run at build time
+{%- endif -%}
+{%- if item.kind.only_debug_builds and not item.added_in_non_debug -%}
+, is only resolved via dev-dependencies
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro cratesio(crate) -%}
+[`{{ crate.name }} {{ crate.version }}`](https://crates.io/crates/{{ crate.name }}/{{ crate.version }})
+{%- endmacro -%}
+
+{%- macro cratediff(comparison) -%}
+[`{{ comparison.ident.name }} {{ comparison.closest_different_old_version }}..{{ comparison.ident.version }}`](https://diff.weiznich.de/{{ comparison.ident.name }}/{{ comparison.closest_different_old_version }}/{{ comparison.ident.version }})
+{%- endmacro -%}
+
+{%- macro change(comparison) %}
+- [ ] {% if comparison.closest_different_old_version -%}
+        {{ cratediff(comparison) }}
+        {%-if comparison.all_other_old_versions -%}
+            {{" "}}(other previous versions: {{ comparison.all_other_old_versions | join(", ") }})
+        {%- endif -%}
+    {%- else -%}
+        {{ cratesio(comparison.ident) }} (version stays the same)
+    {%- endif -%}
+    {%- if comparison.added_in_platforms -%}
+        , added to {% for platform in comparison.added_in_platforms -%}
+            {{ platform | short_platform }} (because of {{ comparison.added_in_platforms[platform][0] }}
+            {%- if comparison.added_in_platforms | length > 1 -%}
+                , and others
+            {%- endif -%}
+            )
+        {%- endfor -%}
+    {%- endif -%}
+    {%- if comparison.added_in_build -%}
+        , now run at build {{ because(comparison.added_in_build) }}
+    {%- endif -%}
+    {%- if comparison.added_in_non_debug -%}
+        , now only resolved via dev-dependencies {{ because(comparison.added_in_non_debug) }}
+    {%- endif -%}
+    {{ builddebug(comparison) }}
+{%- endmacro -%}

@@ -1,0 +1,25 @@
+[package]
+name = "cargo-resolvediff"
+description = "A tool for diffing `cargo` dependency resolutions between updates"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+documentation = "https://docs.rs/cargo-resolvediff"
+repository = "https://github.com/GiGainfosystems/cargo-resolvediff"
+keywords = ["cargo", "diff", "dependency", "lock", "metadata"]
+categories = ["development-tools::cargo-plugins"]
+readme = "README.md"
+
+[dependencies]
+cargo_metadata = "0.23"
+semver = "1.0"
+camino = "1.2.1"
+serde_json = "1.0"
+serde = { version = "1.0", features = [ "derive" ] }
+crates_io_api = "0.12"
+toml_edit = "0.24"
+color-eyre = "0.6"
+tinyvec = "1.10"
+itertools = { version = "0.14", default-features = false }
+clap = { version = "4.5.54", features = [ "derive" ] }
+minijinja = { version = "2.14", features = [ "loop_controls", "loader" ] }

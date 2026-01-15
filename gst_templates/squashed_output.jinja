@@ -1,0 +1,13 @@
+{%- include "helpers.jinja" -%}
+
+# Dependency updates:
+{%- if major_updates %}
+
+## Major crate updates:
+    {%- for comparison in changed -%}
+        {%- if comparison.ident in major_updates -%}
+            {{ change(comparison) }}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endif -%}
+{%- include "body.jinja" -%}
