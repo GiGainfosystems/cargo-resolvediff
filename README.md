@@ -15,7 +15,7 @@ As is, this crate does not have the capability to diff (well) between a version 
 It also currently does not run `cargo check` for any platform except the one the target crate/workspace defaults to.
 
 ## Pitfalls for dependencies that ought to be kept in sync
-As is, dependencies for which versions must be kept in sync are not supported, since the automatic major update mechanism always only handles one crate at a time, and as it is currently not possible to simply compare between two existing versions, so manual updates also don't work yet.
+As is, dependencies for which versions must be kept in sync are not supported, since the automatic major update mechanism always only handles one crate at a time. A manual update and then comparing using `--git --from` is, however, possible.
 
 ## Usage
 ```
@@ -46,7 +46,15 @@ Options:
           but don't split minor and major updates into their own diffs
 
   -g, --git
-          Create `git` commits
+          Create `git` commits or read a `git` repository
+
+      --from <FROM>
+          Don't do any updates,
+          but compare from a specific git revision to the current one, or to `--to`
+
+      --to <TO>
+          Don't do any updates,
+          but compare until a specific git revision from the current one, or from `--from`
 
   -t, --templated
           Produce templated output (or prettified JSON for missing templates)
@@ -69,12 +77,12 @@ Options:
             The defaults are "Automatic minor dependency updates using `cargo update`",
             "Automatic major dependency update of `{package}` to `{version}`" and
             "Automatic dependency updates" respectively.
-          * `minor_output.jinja`, `major_output.jinja`, `squashed_output.jinja` set the output data
-            for the templated output with `--templated` or `--templated-in-json`.
+          * `minor_output.jinja`, `major_output.jinja`, `squashed_output.jinja` and
+            `git_output.jinja` set the output data for the templated output with `--templated` or
+            `--templated-in-json`.
             The default is just a prettified JSON dump.
           
-          The prettified JSON dump for outputs is always the same as the context
-          the associated template gets.
+          The prettified JSON dump for outputs is always the same as the context the associated template gets.
           
           Extra context per template kind:
           * Output templates receive the commit hash if a new commit was made (via `--git`)
@@ -82,6 +90,8 @@ Options:
           * `squashed_commit.jinja` & `squashed_output.jinja`:
             `major_updates` & `failed_major_updates` are both lists of objects
             with the keys `package` & `version`, pointing to strings each
+          * `git_output.jinja`: `from` & `to` are both strings containing the commit hashes
+            that were part of the comparison
           
           Extra functions implemented:
           * `short_platform` (filter): Removes the last segment if it remains unique,

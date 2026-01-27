@@ -102,6 +102,7 @@ impl OutputConfig {
     const MAJOR_OUTPUT: &str = "major_output.jinja";
     const SQUASHED_COMMIT: &str = "squashed_commit.jinja";
     const SQUASHED_OUTPUT: &str = "squashed_output.jinja";
+    const GIT_OUTPUT: &str = "git_output.jinja";
 
     fn output(
         &self,
@@ -216,6 +217,18 @@ impl OutputConfig {
         )
     }
 
+    fn git_output(&self, diff: &Diff<'_>, from: &str, to: &str) -> Result<serde_json::Value> {
+        self.output(
+            Self::GIT_OUTPUT,
+            minijinja::context! {
+                from => from,
+                to => to,
+                ..minijinja::Value::from_serialize(diff),
+            },
+            Some(to),
+        )
+    }
+
     fn final_output(&self, value: &serde_json::Value) -> Result<()> {
         if !self.templated_in_json {
             println!(
@@ -275,9 +288,17 @@ struct Args {
     /// into their own diffs
     #[arg(short = 'M', long, conflicts_with("major"))]
     squashed_major: bool,
-    /// Create `git` commits
+    /// Create `git` commits or read a `git` repository
     #[arg(short, long)]
     git: bool,
+    /// Don't do any updates, but compare from a specific git revision to the current one, or to
+    /// `--to`
+    #[arg(long, conflicts_with_all(["major", "squashed_major"]), requires("git"))]
+    from: Option<String>,
+    /// Don't do any updates, but compare until a specific git revision from the current one, or
+    /// from `--from`
+    #[arg(long, conflicts_with_all(["major", "squashed_major"]), requires("git"))]
+    to: Option<String>,
     /// Produce templated output (or prettified JSON for missing templates)
     #[arg(short, long, conflicts_with("major"))]
     templated: bool,
@@ -295,15 +316,16 @@ struct Args {
     /// The template names are:
     /// * `minor_commit.jinja`, `major_commit.jinja` and `squashed_commit.jinja` set the commit messages.
     ///   The defaults are "Automatic minor dependency updates using `cargo update`", "Automatic major dependency update of `{package}` to `{version}`" and "Automatic dependency updates" respectively.
-    /// * `minor_output.jinja`, `major_output.jinja` and `squashed_output.jinja` set the output data for the templated output with `--templated` or `--templated-in-json`.
+    /// * `minor_output.jinja`, `major_output.jinja`, `squashed_output.jinja` and `git_output.jinja` set the output data for the templated output with `--templated` or `--templated-in-json`.
     ///   The default is just a prettified JSON dump.
     ///
-    /// The prettified JSON dump is always the same as the context the associated template gets.
+    /// The prettified JSON dump for outputs is always the same as the context the associated template gets.
     ///
     /// Extra context per template kind:
     /// * Output templates receive the commit hash if a new commit was made (via `--git`)
     /// * `major_commit.jinja` & `major_output.jinja`: `package` & `version` are both strings
     /// * `squashed_commit.jinja` & `squashed_output.jinja`: `major_updates` & `failed_major_updates` are both lists of objects with the keys `package` & `version`, pointing to strings each
+    /// * `git_output.jinja`: `from` & `to` are both strings containing the commit hashes that were part of the comparison
     ///
     /// Extra functions implemented:
     /// * `short_platform` (filter): Removes the last segment if it remains unique, and all `unknown` segments from platform tuples
@@ -311,10 +333,16 @@ struct Args {
     template_path: Option<PathBuf>,
 }
 
+#[derive(Clone)]
 enum Task {
     Minor,
     Major,
     Squashed,
+    Git {
+        from: String,
+        to: String,
+        return_to: String,
+    },
 }
 
 struct AppContext {
@@ -345,7 +373,7 @@ impl TryFrom<Args> for AppContext {
             args.platform.into_iter().map(Platform).collect::<Vec<_>>()
         };
 
-        let repository = args.git.then(|| {
+        let mut repository = args.git.then(|| {
             let repository_path = manifest_path.parent().expect("there was a file name");
             // We might already be in the directory with the `Cargo.toml`, in which case `git`
             // commands can run here:
@@ -363,6 +391,16 @@ impl TryFrom<Args> for AppContext {
             Task::Major
         } else if args.squashed_major {
             Task::Squashed
+        } else if args.from.is_some() || args.to.is_some() {
+            let repository = repository.as_mut().expect("--from & --to require --git");
+
+            let current = repository.current_branch_or_commit()?;
+            let fix = |target: Option<_>| target.filter(|s| s != "HEAD").unwrap_or(current.clone());
+            Task::Git {
+                from: fix(args.from),
+                to: fix(args.to),
+                return_to: current,
+            }
         } else {
             Task::Minor
         };
@@ -599,6 +637,29 @@ impl AppContext {
         )?;
         Ok(output)
     }
+
+    fn git_task(&mut self, from: &str, to: &str, return_to: &str) -> Result<serde_json::Value> {
+        let mut repository = self
+            .repository
+            .take()
+            .expect("git comparisons require a repository");
+
+        repository.checkout(from)?;
+        let from_commit = repository.current_commit()?;
+        let from = self.resolve()?;
+
+        repository.checkout(to)?;
+        let to_commit = repository.current_commit()?;
+        let to = self.resolve()?;
+
+        repository.checkout(return_to)?;
+
+        self.repository = Some(repository);
+        let output =
+            self.output
+                .git_output(&Diff::between(&from, &to), &from_commit, &to_commit)?;
+        Ok(output)
+    }
 }
 
 fn main() -> Result<()> {
@@ -606,7 +667,7 @@ fn main() -> Result<()> {
 
     let mut ctx = AppContext::try_from(Args::parse())?;
 
-    let out = match ctx.task {
+    let out = match ctx.task.clone() {
         Task::Minor => ctx.minor_update_task()?.1,
         Task::Major => {
             let out = ctx.major_update_task()?;
@@ -614,6 +675,11 @@ fn main() -> Result<()> {
             return Ok(());
         }
         Task::Squashed => ctx.squashed_update_task()?,
+        Task::Git {
+            from,
+            to,
+            return_to,
+        } => ctx.git_task(&from, &to, &return_to)?,
     };
 
     ctx.output.final_output(&out)?;

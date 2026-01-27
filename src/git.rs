@@ -33,6 +33,11 @@ impl Repository {
         Ok(())
     }
 
+    /// Returns the current commit ID
+    pub fn current_commit(&self) -> Result<String> {
+        cmd!([git "rev-parse"] [HEAD] -> String in &self.path)
+    }
+
     /// `git commit` everything that got added, if there were any changes, and return the commit
     /// ID.
     ///
@@ -43,7 +48,21 @@ impl Repository {
         }
         cmd!([git commit] ["-m" (message)] in &self.path)?;
         self.dirty = false;
-        let out = cmd!([git "rev-parse"] [HEAD] -> String in &self.path)?;
-        Ok(Some(out))
+        Ok(Some(self.current_commit()?))
+    }
+
+    /// Returns the current branch, if any, or the current commit ID
+    pub fn current_branch_or_commit(&self) -> Result<String> {
+        let branch = cmd!([git branch] ["--show-current"] -> String in &self.path)?;
+        if !branch.is_empty() {
+            Ok(branch)
+        } else {
+            Ok(self.current_commit()?)
+        }
+    }
+
+    /// Checks out a given branch or commit ID
+    pub fn checkout(&mut self, target: &str) -> Result<()> {
+        cmd!([git "checkout"] [(target)] in &self.path)
     }
 }
