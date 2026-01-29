@@ -10,7 +10,7 @@ use color_eyre::{Result, eyre::eyre};
 use crates_io_api::SyncClient;
 use itertools::Itertools;
 use semver::{Version, VersionReq};
-use std::{borrow::Borrow, collections::BTreeMap, iter};
+use std::{borrow::Borrow, collections::BTreeMap, fs, iter, path::PathBuf};
 use tinyvec::{ArrayVec, array_vec};
 
 /// Check whether a [`Version`] is considered a major update for a given [`VersionReq`].
@@ -288,6 +288,7 @@ impl ManifestDependencySet {
     /// Commit all changes made to the [`ManifestSet`] (see [`MutableTomlFile::commit`])
     pub fn commit(&mut self) -> Result<()> {
         self.manifests.write_back()?;
+        self.manifests.commit_lock_contents()?;
 
         // NOTE: Writing all back before committing allows rolling back if any of the write backs
         // failed
@@ -303,6 +304,11 @@ impl ManifestDependencySet {
     /// reset the parsed dependency versions to the original values
     pub fn roll_back(&mut self) -> Result<()> {
         let mut errors = Vec::new();
+
+        if let Err(error) = self.manifests.roll_back_lock_contents() {
+            errors.push(error);
+        }
+
         for manifest in &mut self.manifests.manifests {
             if let Err(error) = manifest.roll_back() {
                 errors.push(error);
@@ -327,12 +333,15 @@ impl ManifestDependencySet {
 /// A set of manifests for a workspace
 pub struct ManifestSet {
     manifests: Vec<MutableTomlFile>,
+    lock_path: PathBuf,
+    last_lock_contents: String,
 }
 
 impl ManifestSet {
     /// Collect all manifests from an [`IndexedMetadata`]
     pub fn collect(metadata: &IndexedMetadata) -> Result<Self> {
         let workspace_manifest = metadata.workspace_root.join("Cargo.toml");
+        let lock_path = workspace_manifest.with_extension("lock").into();
 
         let mut member_manifests = metadata
             .packages
@@ -352,7 +361,13 @@ impl ManifestSet {
             .map(MutableTomlFile::open)
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(ManifestSet { manifests })
+        let last_lock_contents = fs::read_to_string(&lock_path)?;
+
+        Ok(ManifestSet {
+            manifests,
+            lock_path,
+            last_lock_contents,
+        })
     }
 
     pub fn as_slice(&self) -> &[MutableTomlFile] {
@@ -516,6 +531,16 @@ impl ManifestSet {
     ) -> Result<()> {
         self.update_versions_in_memory(mentions, version);
         self.write_back_for_all(mentions)?;
+        Ok(())
+    }
+
+    pub fn commit_lock_contents(&mut self) -> Result<()> {
+        self.last_lock_contents = fs::read_to_string(&self.lock_path)?;
+        Ok(())
+    }
+
+    pub fn roll_back_lock_contents(&mut self) -> Result<()> {
+        fs::write(&self.lock_path, &self.last_lock_contents)?;
         Ok(())
     }
 }
