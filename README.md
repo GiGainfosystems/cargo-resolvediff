@@ -1,10 +1,11 @@
 # `cargo-resolvediff`
-
 This program does both minor updates (using `cargo update`) and major updates (by editing the `Cargo.toml`s in the workspace), and produces review diffs between each step for the dependency resolution for the given platforms.
 
 This allows for reviewing all changes in your dependences (minus `git` dependencies, see the next section), without reviewing changes for crates that you don't ever build when `--filter-to-plaforms` is enabled.
 
 See [`example-output-squashed.md`](example-output-squashed.md) as an example.
+
+This crate is also published on [https://crates.io/crates/cargo-resolvediff] and can be installed using `cargo install cargo-resolvediff`.
 
 ## Warning about `git` dependencies
 `git` dependencies that don't pin a specific commit & aren't under the users control will not show up in the diff currently, which means that you'd have to check them manually.
