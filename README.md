@@ -31,7 +31,8 @@ Options:
           Defaults to only the target tuple of the host if none are given.
 
   -P, --filter-to-platforms
-          Only include resolutions for the platforms given with `--platform` for the main diff
+          Only include resolutions for the platforms given with `--platform`
+          for the main diff
 
   -c, --check
           Run `cargo check` for updates
@@ -68,27 +69,29 @@ Options:
   -T, --template-path <TEMPLATE_PATH>
           The path to a directory containing minijinja templates
           
-          This option makes sense outside of `--templated`/`--templated-in-json`, because commits
-          made using `--git` still use templating.
+          This option makes sense outside of `--templated`/`--templated-in-json`, because
+          commits made using `--git` still use templating.
           
           The template names are:
           * `minor_commit.jinja`, `major_commit.jinja` and `squashed_commit.jinja`
             set the commit messages.
           * `minor_output.jinja`, `major_output.jinja`, `squashed_output.jinja` and
-            `git_output.jinja` set the output data for the templated output with `--templated` or
-            `--templated-in-json`.
+            `git_output.jinja` set the output data for the templated output
+            with `--templated` or `--templated-in-json`.
 
-          The JSON dump for outputs (without `--templated`) is always the same as the context the
-          associated template gets.
+          The JSON dump for outputs (without `--templated`) is always the same
+          as the context the associated template gets.
           
           Extra context per template kind:
-          * Output templates receive the commit hash if a new commit was made (via `--git`)
-          * `major_commit.jinja` & `major_output.jinja`: `package` & `version` are both strings
+          * Output templates receive the commit hash if a new commit was made
+            (via `--git`)
+          * `major_commit.jinja` & `major_output.jinja`:
+            `package` & `version` are both strings
           * `squashed_commit.jinja` & `squashed_output.jinja`:
             `major_updates` & `failed_major_updates` are both lists of objects
             with the keys `package` & `version`, pointing to strings each
-          * `git_output.jinja`: `from` & `to` are both strings containing the commit hashes
-            that were part of the comparison
+          * `git_output.jinja`: `from` & `to` are both strings containing
+            the commit hashes that were part of the comparison
           
           Extra functions implemented:
           * `short_platform` (filter): Removes the last segment if it remains unique,
@@ -104,8 +107,7 @@ Options:
 The default templates can be found at [`src/default_templates/`](src/default_templates).
 
 ## Notes about the implementation
-Most places use `BTreeMap`s & `BTreeSet`s for their deterministic iteration order (& corresponding
-sorted JSON output).
+Most places use `BTreeMap`s & `BTreeSet`s for their deterministic iteration order (& corresponding sorted JSON output).
 
 ## License
 * Apache License, Version 2.0 (<https://www.apache.org/licenses/LICENSE-2.0>).
