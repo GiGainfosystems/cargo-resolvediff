@@ -110,13 +110,21 @@ impl OutputConfig {
         ctx: minijinja::Value,
         commit: Option<&str>,
     ) -> Result<serde_json::Value> {
-        let ctx = minijinja::context! {
+        let mut ctx = minijinja::context! {
             commit => commit,
             ..ctx
         };
 
-        if self.templated_output {
-            Ok(self.template_ctx.render_output(name, &ctx)?.into())
+        if self.templated_in_json {
+            let templated = self.jinja.get_template(name)?.render(&ctx)?;
+            ctx = minijinja::context! {
+                templated => templated,
+                ..ctx
+            };
+        }
+
+        if self.templated_output && !self.templated_in_json {
+            Ok(self.jinja.get_template(name)?.render(&ctx)?.into())
         } else {
             Ok(serde_json::to_value(&ctx)?)
         }
@@ -382,7 +390,7 @@ impl TryFrom<Args> for AppContext {
         });
 
         let output = OutputConfig {
-            templated_output: args.templated || args.templated_in_json,
+            templated_output: args.templated,
             templated_in_json: args.templated_in_json,
             template_ctx: TemplateContext::init(&platforms, args.template_path)?,
         };
