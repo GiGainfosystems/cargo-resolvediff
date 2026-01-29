@@ -74,15 +74,12 @@ Options:
           The template names are:
           * `minor_commit.jinja`, `major_commit.jinja` and `squashed_commit.jinja`
             set the commit messages.
-            The defaults are "Automatic minor dependency updates using `cargo update`",
-            "Automatic major dependency update of `{package}` to `{version}`" and
-            "Automatic dependency updates" respectively.
           * `minor_output.jinja`, `major_output.jinja`, `squashed_output.jinja` and
             `git_output.jinja` set the output data for the templated output with `--templated` or
             `--templated-in-json`.
-            The default is just a prettified JSON dump.
-          
-          The prettified JSON dump for outputs is always the same as the context the associated template gets.
+
+          The JSON dump for outputs (without `--templated`) is always the same as the context the
+          associated template gets.
           
           Extra context per template kind:
           * Output templates receive the commit hash if a new commit was made (via `--git`)
@@ -103,6 +100,8 @@ Options:
   -V, --version
           Print version
 ```
+
+The default templates can be found at [`src/default_templates/`](src/default_templates).
 
 ## Notes about the implementation
 Most places use `BTreeMap`s & `BTreeSet`s for their deterministic iteration order (& corresponding

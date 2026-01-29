@@ -1,4 +1,4 @@
-{%- include "helpers.jinja" -%}
+{%- include "_default_templates_helpers.jinja" -%}
 
 # Dependency updates:
 {%- if major_updates %}
@@ -10,4 +10,4 @@
         {%- endif -%}
     {%- endfor -%}
 {%- endif -%}
-{%- include "body.jinja" -%}
+{%- include "_default_templates_body.jinja" -%}

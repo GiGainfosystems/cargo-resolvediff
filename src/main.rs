@@ -23,76 +23,10 @@ use cargo_resolvediff::major_updates::{
 use cargo_resolvediff::resolve::{Resolved, SpecificCrateIdent};
 use cargo_resolvediff::util::{host_platform, locate_project, update};
 
-enum TemplateContext {
-    Minijinja {
-        path: PathBuf,
-        jinja: Box<minijinja::Environment<'static>>,
-    },
-    OnlyDefaults,
-}
-
-impl TemplateContext {
-    fn init(platforms: &[Platform], path: Option<PathBuf>) -> Result<Self> {
-        match path {
-            None => Ok(TemplateContext::OnlyDefaults),
-            Some(path) => {
-                if !path.is_dir() {
-                    bail!("Template directory doesn't exist");
-                }
-
-                let mut jinja = minijinja::Environment::new();
-                jinja.set_loader(minijinja::path_loader(&path));
-
-                let short_platform = {
-                    let mapping = platforms
-                        .iter()
-                        .map(|platform| {
-                            let short = if let Some((short, _)) = platform.0.rsplit_once("-")
-                                && !platforms
-                                    .iter()
-                                    .any(|other| platform != other && other.0.starts_with(short))
-                            {
-                                short
-                            } else {
-                                &platform.0
-                            };
-                            (platform.0.clone(), short.replace("-unknown", ""))
-                        })
-                        .collect::<HashMap<_, _>>();
-                    move |platform: String| mapping[&platform].clone()
-                };
-
-                jinja.add_filter("short_platform", short_platform);
-
-                Ok(TemplateContext::Minijinja {
-                    path,
-                    jinja: Box::new(jinja),
-                })
-            }
-        }
-    }
-
-    fn render(&self, name: &str, ctx: &impl Serialize) -> Result<Option<String>> {
-        match self {
-            TemplateContext::Minijinja { path, jinja } if path.join(name).is_file() => {
-                Ok(Some(jinja.get_template(name)?.render(ctx)?))
-            }
-            TemplateContext::Minijinja { .. } | TemplateContext::OnlyDefaults => Ok(None),
-        }
-    }
-
-    fn render_output(&self, name: &str, ctx: &impl Serialize) -> Result<String> {
-        match self.render(name, ctx)? {
-            Some(out) => Ok(out),
-            None => Ok(serde_json::to_string_pretty(ctx)?),
-        }
-    }
-}
-
 struct OutputConfig {
     templated_output: bool,
     templated_in_json: bool,
-    template_ctx: TemplateContext,
+    jinja: minijinja::Environment<'static>,
 }
 
 impl OutputConfig {
@@ -103,6 +37,95 @@ impl OutputConfig {
     const SQUASHED_COMMIT: &str = "squashed_commit.jinja";
     const SQUASHED_OUTPUT: &str = "squashed_output.jinja";
     const GIT_OUTPUT: &str = "git_output.jinja";
+
+    const DEFAULT_TEMPLATES: &[(&str, &str)] = &[
+        (
+            "_default_templates_body.jinja",
+            include_str!("default_templates/_default_templates_body.jinja"),
+        ),
+        (
+            "_default_templates_helpers.jinja",
+            include_str!("default_templates/_default_templates_helpers.jinja"),
+        ),
+        (
+            Self::MINOR_COMMIT,
+            include_str!("default_templates/minor_commit.jinja"),
+        ),
+        (
+            Self::MINOR_OUTPUT,
+            include_str!("default_templates/minor_output.jinja"),
+        ),
+        (
+            Self::MAJOR_COMMIT,
+            include_str!("default_templates/major_commit.jinja"),
+        ),
+        (
+            Self::MAJOR_OUTPUT,
+            include_str!("default_templates/major_output.jinja"),
+        ),
+        (
+            Self::SQUASHED_COMMIT,
+            include_str!("default_templates/squashed_commit.jinja"),
+        ),
+        (
+            Self::SQUASHED_OUTPUT,
+            include_str!("default_templates/squashed_output.jinja"),
+        ),
+        (
+            Self::GIT_OUTPUT,
+            include_str!("default_templates/git_output.jinja"),
+        ),
+    ];
+
+    fn init_jinja(
+        platforms: &[Platform],
+        path: Option<PathBuf>,
+    ) -> Result<minijinja::Environment<'static>> {
+        let mut jinja = minijinja::Environment::new();
+
+        let short_platform = {
+            let mapping = platforms
+                .iter()
+                .map(|platform| {
+                    let short = if let Some((short, _)) = platform.0.rsplit_once("-")
+                        && !platforms
+                            .iter()
+                            .any(|other| platform != other && other.0.starts_with(short))
+                    {
+                        short
+                    } else {
+                        &platform.0
+                    };
+                    (platform.0.clone(), short.replace("-unknown", ""))
+                })
+                .collect::<HashMap<_, _>>();
+            move |platform: String| mapping[&platform].clone()
+        };
+
+        jinja.add_filter("short_platform", short_platform);
+
+        if let Some(ref path) = path {
+            if !path.is_dir() {
+                bail!("Template directory doesn't exist");
+            }
+
+            jinja.set_loader(minijinja::path_loader(&path));
+        }
+
+        for (name, template) in Self::DEFAULT_TEMPLATES {
+            if let Some(ref path) = path
+                && path.join(name).is_file()
+            {
+                // Template exists
+                jinja.get_template(name)?;
+                continue;
+            }
+
+            jinja.add_template(name, template)?;
+        }
+
+        Ok(jinja)
+    }
 
     fn output(
         &self,
@@ -131,13 +154,7 @@ impl OutputConfig {
     }
 
     fn minor_commit(&self, diff: &Diff<'_>) -> Result<String> {
-        let out = self
-            .template_ctx
-            .render(Self::MINOR_COMMIT, diff)?
-            .unwrap_or_else(|| {
-                "Automatic minor dependency updates using `cargo update`".to_owned()
-            });
-        Ok(out)
+        Ok(self.jinja.get_template(Self::MINOR_COMMIT)?.render(diff)?)
     }
 
     fn minor_output(&self, diff: &Diff<'_>, commit: Option<&str>) -> Result<serde_json::Value> {
@@ -158,14 +175,9 @@ impl OutputConfig {
 
     fn major_commit(&self, diff: &Diff<'_>, package: &str, version: &Version) -> Result<String> {
         let out = self
-            .template_ctx
-            .render(
-                Self::MAJOR_COMMIT,
-                &Self::major_context(diff, package, version),
-            )?
-            .unwrap_or_else(|| {
-                format!("Automatic major dependency update of `{package}` to `{version}`")
-            });
+            .jinja
+            .get_template(Self::MAJOR_COMMIT)?
+            .render(Self::major_context(diff, package, version))?;
         Ok(out)
     }
 
@@ -201,13 +213,14 @@ impl OutputConfig {
         major_updates: &[SpecificCrateIdent],
         failed_major_updates: &[SpecificCrateIdent],
     ) -> Result<String> {
-        let out = self
-            .template_ctx
-            .render(
-                Self::SQUASHED_COMMIT,
-                &Self::squashed_context(diff, major_updates, failed_major_updates),
-            )?
-            .unwrap_or_else(|| "Automatic dependency updates".to_owned());
+        let out =
+            self.jinja
+                .get_template(Self::SQUASHED_COMMIT)?
+                .render(Self::squashed_context(
+                    diff,
+                    major_updates,
+                    failed_major_updates,
+                ))?;
         Ok(out)
     }
 
@@ -323,11 +336,9 @@ struct Args {
     ///
     /// The template names are:
     /// * `minor_commit.jinja`, `major_commit.jinja` and `squashed_commit.jinja` set the commit messages.
-    ///   The defaults are "Automatic minor dependency updates using `cargo update`", "Automatic major dependency update of `{package}` to `{version}`" and "Automatic dependency updates" respectively.
     /// * `minor_output.jinja`, `major_output.jinja`, `squashed_output.jinja` and `git_output.jinja` set the output data for the templated output with `--templated` or `--templated-in-json`.
-    ///   The default is just a prettified JSON dump.
     ///
-    /// The prettified JSON dump for outputs is always the same as the context the associated template gets.
+    /// The JSON dump for outputs (without `--templated`) is always the same as the context the associated template gets.
     ///
     /// Extra context per template kind:
     /// * Output templates receive the commit hash if a new commit was made (via `--git`)
@@ -392,7 +403,7 @@ impl TryFrom<Args> for AppContext {
         let output = OutputConfig {
             templated_output: args.templated,
             templated_in_json: args.templated_in_json,
-            template_ctx: TemplateContext::init(&platforms, args.template_path)?,
+            jinja: OutputConfig::init_jinja(&platforms, args.template_path)?,
         };
 
         let task = if args.major {
