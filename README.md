@@ -107,3 +107,7 @@ Options:
 ## Notes about the implementation
 Most places use `BTreeMap`s & `BTreeSet`s for their deterministic iteration order (& corresponding
 sorted JSON output).
+
+## License
+* Apache License, Version 2.0 (<https://www.apache.org/licenses/LICENSE-2.0>).
+* MIT License (<https://opensource.org/licenses/MIT>)
