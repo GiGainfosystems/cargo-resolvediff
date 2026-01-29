@@ -14,7 +14,7 @@ pub fn update(path: &Path, check: bool) -> Result<bool> {
         return Ok(false);
     }
 
-    if check && !cmd!([cargo check] ["--manifest-path" (path)] -> bool)? {
+    if check && !cmd!([cargo check] ["--manifest-path" (path) "--all-targets"] -> bool)? {
         return Ok(false);
     }
 
