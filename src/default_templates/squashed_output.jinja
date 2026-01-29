@@ -10,4 +10,11 @@
         {%- endif -%}
     {%- endfor -%}
 {%- endif -%}
+{%- if failed_major_updates %}
+
+## Failed major crate updates:
+    {%- for failed in failed_major_updates %}
+- {{ cratesio(failed) }}
+    {%- endfor -%}
+{%- endif -%}
 {%- include "_default_templates_body.jinja" -%}
