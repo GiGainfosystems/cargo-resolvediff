@@ -5,7 +5,7 @@ This allows for reviewing all changes in your dependences (minus `git` dependenc
 
 See [`example-output-squashed.md`](example-output-squashed.md) as an example.
 
-This crate is also published on [https://crates.io/crates/cargo-resolvediff] and can be installed using `cargo install cargo-resolvediff`.
+This crate is also published on [crates.io](https://crates.io/crates/cargo-resolvediff) and can be installed using `cargo install cargo-resolvediff`.
 
 ## Warning about `git` dependencies
 `git` dependencies that don't pin a specific commit & aren't under the users control will not show up in the diff currently, which means that you'd have to check them manually.
