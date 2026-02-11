@@ -237,6 +237,7 @@ impl ManifestDependencySet {
                         if dependency.contains_key("registry")
                             || !dependency.contains_key("version")
                             || dependency.contains_key("git")
+                            || dependency.contains_key("path")
                         {
                             continue;
                         }
