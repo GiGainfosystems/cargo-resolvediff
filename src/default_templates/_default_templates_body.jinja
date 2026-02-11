@@ -1,5 +1,9 @@
 {%- include "_default_templates_helpers.jinja" -%}
 
+{%- if not added and not changed and not removed and not filtered_added and not filtered_removed and not major_updates and not failed_major_updates %}
+None of the included package versions changed.
+{%- endif -%}
+
 {%- if added %}
 
 ## Added:
