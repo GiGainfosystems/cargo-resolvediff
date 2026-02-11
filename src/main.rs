@@ -667,6 +667,7 @@ impl AppContext {
         let from_commit = repository.current_commit()?;
         let from = self.resolve()?;
 
+        repository.checkout(return_to)?;
         repository.checkout(to)?;
         let to_commit = repository.current_commit()?;
         let to = self.resolve()?;
