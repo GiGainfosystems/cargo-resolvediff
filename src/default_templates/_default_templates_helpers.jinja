@@ -56,7 +56,7 @@
         , now run at build {{ because(comparison.added_in_build) }}
     {%- endif -%}
     {%- if comparison.added_in_non_debug -%}
-        , now only resolved via dev-dependencies {{ because(comparison.added_in_non_debug) }}
+        , now resolved outside of dev-dependencies {{ because(comparison.added_in_non_debug) }}
     {%- endif -%}
     {{ builddebug(comparison) }}
 {%- endmacro -%}
