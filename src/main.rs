@@ -25,6 +25,8 @@ use cargo_resolvediff::util::{host_platform, locate_project, update};
 
 struct OutputConfig {
     templated_output: bool,
+    /// only set if `templated_output` is also `true`
+    templated_major_as_squashed: bool,
     templated_in_json: bool,
     jinja: minijinja::Environment<'static>,
 }
@@ -76,6 +78,8 @@ impl OutputConfig {
             include_str!("default_templates/git_output.jinja"),
         ),
     ];
+
+    const WAS_TEMPLATED_ERR: &str = "Was templated, and as such is always a string";
 
     fn init_jinja(
         platforms: &[Platform],
@@ -146,7 +150,7 @@ impl OutputConfig {
             };
         }
 
-        if self.templated_output && !self.templated_in_json {
+        if self.templated_output {
             Ok(self.jinja.get_template(name)?.render(&ctx)?.into())
         } else {
             Ok(serde_json::to_value(&ctx)?)
@@ -250,13 +254,37 @@ impl OutputConfig {
         )
     }
 
+    fn merged_major_output(&self, squashed_diff: &Diff<'_>, updates: &MajorUpdates) -> Result<serde_json::Value> {
+        if self.templated_major_as_squashed {
+            self.squashed_output(
+                squashed_diff,
+                &updates.major_order,
+                &updates.failed_major_updates,
+                None,
+            )
+        } else if self.templated_output {
+            let mut out = updates.minor.as_str().expect(Self::WAS_TEMPLATED_ERR).to_owned();
+            for i in &updates.major_order {
+                while !out.ends_with("\n\n") {
+                    out.push('\n');
+                }
+
+                let update = &updates.major_updates[&i.name];
+                out.push_str(update.as_str().expect(Self::WAS_TEMPLATED_ERR));
+            }
+            Ok(out.into())
+        } else {
+            Ok(serde_json::to_value(updates)?)
+        }
+    }
+
     fn final_output(&self, value: &serde_json::Value) -> Result<()> {
         if !self.templated_in_json {
             println!(
                 "{}",
                 value
                     .as_str()
-                    .expect("Was templated, and as such is always a string")
+                    .expect(Self::WAS_TEMPLATED_ERR)
             );
         } else {
             output_json(value)?;
@@ -321,13 +349,20 @@ struct Args {
     #[arg(long, conflicts_with_all(["major", "squashed_major"]), requires("git"))]
     to: Option<String>,
     /// Produce templated output (or prettified JSON for missing templates)
-    #[arg(short, long, conflicts_with("major"))]
+    ///
+    /// For `--major`, this concatenates the templates for the minor updates, and then the major
+    /// update template per major update.
+    #[arg(short, long)]
     templated: bool,
+    /// Same as `--templated`, but use the squashed template format by taking a diff over all
+    /// changes
+    #[arg(short, long, requires("major"), conflicts_with("templated"))]
+    templated_as_squashed: bool,
     /// Same as `--templated`, but render the templates into strings in a JSON object with more
     /// information
     ///
-    /// This is also compatible with `--major`.
-    #[arg(long, conflicts_with("templated"))]
+    /// This is also compatible with `--major` _and_.
+    #[arg(long, conflicts_with_all(["templated", "templated_as_squashed"]))]
     templated_in_json: bool,
     /// The path to a directory containing minijinja templates
     ///
@@ -401,7 +436,8 @@ impl TryFrom<Args> for AppContext {
         });
 
         let output = OutputConfig {
-            templated_output: args.templated,
+            templated_output: args.templated || args.templated_as_squashed,
+            templated_major_as_squashed: args.templated_as_squashed,
             templated_in_json: args.templated_in_json,
             jinja: OutputConfig::init_jinja(&platforms, args.template_path)?,
         };
@@ -505,7 +541,7 @@ impl MajorUpdateContext {
 #[derive(Serialize)]
 struct MajorUpdates {
     minor: serde_json::Value,
-    major_order: Vec<String>,
+    major_order: Vec<SpecificCrateIdent>,
     major_updates: BTreeMap<String, serde_json::Value>,
     failed_major_updates: Vec<SpecificCrateIdent>,
 }
@@ -549,10 +585,12 @@ impl AppContext {
         Ok((after, output))
     }
 
-    fn major_update_task(&mut self) -> Result<MajorUpdates> {
-        let mut last = self.resolve()?;
+    fn major_update_task(&mut self) -> Result<serde_json::Value> {
+        let first = self.resolve()?;
+        let mut last_owned;
+        let mut last = &first;
 
-        let (mut major_ctx, direct_dependencies) = MajorUpdateContext::new(&last)?;
+        let (mut major_ctx, direct_dependencies) = MajorUpdateContext::new(&first)?;
 
         let mut major_order = Vec::new();
         let mut major_updates = BTreeMap::new();
@@ -573,7 +611,7 @@ impl AppContext {
             };
 
             let resolve = self.resolve()?;
-            let diff = Diff::between(&last, &resolve);
+            let diff = Diff::between(last, &resolve);
 
             let message = self
                 .output
@@ -592,14 +630,18 @@ impl AppContext {
 
             major_ctx.manifest_deps.commit()?;
 
-            major_order.push(package.name.clone());
+            major_order.push(package.clone());
             major_updates.insert(package.name, output);
 
-            last = resolve;
+            last_owned = resolve;
+            last = &last_owned;
         }
-        let minor = self.minor_update_task()?.1;
 
-        Ok(MajorUpdates {
+        let (last, minor) = self.minor_update_task()?;
+
+        let squashed_diff = Diff::between(&first, &last);
+
+        self.output.merged_major_output(&squashed_diff, &MajorUpdates {
             minor,
             major_order,
             major_updates,
@@ -690,11 +732,7 @@ fn main() -> Result<()> {
 
     let out = match ctx.task.clone() {
         Task::Minor => ctx.minor_update_task()?.1,
-        Task::Major => {
-            let out = ctx.major_update_task()?;
-            output_json(&out)?;
-            return Ok(());
-        }
+        Task::Major => ctx.major_update_task()?,
         Task::Squashed => ctx.squashed_update_task()?,
         Task::Git {
             from,
