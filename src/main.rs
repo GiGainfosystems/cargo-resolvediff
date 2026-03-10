@@ -550,7 +550,7 @@ impl AppContext {
     }
 
     fn major_update_task(&mut self) -> Result<MajorUpdates> {
-        let (mut last, minor) = self.minor_update_task()?;
+        let mut last = self.resolve()?;
 
         let (mut major_ctx, direct_dependencies) = MajorUpdateContext::new(&last)?;
 
@@ -597,6 +597,7 @@ impl AppContext {
 
             last = resolve;
         }
+        let minor = self.minor_update_task()?.1;
 
         Ok(MajorUpdates {
             minor,
