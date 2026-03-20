@@ -652,8 +652,6 @@ impl AppContext {
     fn squashed_update_task(&mut self) -> Result<serde_json::Value> {
         let before = self.resolve()?;
 
-        self.minor_update()?;
-
         let (mut major_ctx, direct_dependencies) = MajorUpdateContext::new(&before)?;
 
         let mut major_updates = Vec::new();
@@ -675,6 +673,8 @@ impl AppContext {
             major_ctx.manifest_deps.commit()?;
             major_updates.push(package);
         }
+
+        self.minor_update()?;
 
         let after = self.resolve()?;
         let diff = Diff::between(&before, &after);
