@@ -287,13 +287,8 @@ impl OutputConfig {
     }
 
     fn final_output(&self, value: &serde_json::Value) -> Result<()> {
-        if !self.templated_in_json {
-            println!(
-                "{}",
-                value
-                    .as_str()
-                    .expect(Self::WAS_TEMPLATED_ERR)
-            );
+        if self.templated_output {
+            println!("{}", value.as_str().expect(Self::WAS_TEMPLATED_ERR));
         } else {
             output_json(value)?;
         }
