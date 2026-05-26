@@ -254,7 +254,11 @@ impl OutputConfig {
         )
     }
 
-    fn merged_major_output(&self, squashed_diff: &Diff<'_>, updates: &MajorUpdates) -> Result<serde_json::Value> {
+    fn merged_major_output(
+        &self,
+        squashed_diff: &Diff<'_>,
+        updates: &MajorUpdates,
+    ) -> Result<serde_json::Value> {
         if self.templated_major_as_squashed {
             self.squashed_output(
                 squashed_diff,
@@ -263,7 +267,11 @@ impl OutputConfig {
                 None,
             )
         } else if self.templated_output {
-            let mut out = updates.minor.as_str().expect(Self::WAS_TEMPLATED_ERR).to_owned();
+            let mut out = updates
+                .minor
+                .as_str()
+                .expect(Self::WAS_TEMPLATED_ERR)
+                .to_owned();
             for i in &updates.major_order {
                 while !out.ends_with("\n\n") {
                     out.push('\n');
@@ -641,12 +649,15 @@ impl AppContext {
 
         let squashed_diff = Diff::between(&first, &last);
 
-        self.output.merged_major_output(&squashed_diff, &MajorUpdates {
-            minor,
-            major_order,
-            major_updates,
-            failed_major_updates,
-        })
+        self.output.merged_major_output(
+            &squashed_diff,
+            &MajorUpdates {
+                minor,
+                major_order,
+                major_updates,
+                failed_major_updates,
+            },
+        )
     }
 
     fn squashed_update_task(&mut self) -> Result<serde_json::Value> {
