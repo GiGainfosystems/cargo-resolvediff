@@ -18,6 +18,9 @@ It also currently does not run `cargo check` for any platform except the one the
 ## Pitfalls for dependencies that ought to be kept in sync
 As is, dependencies for which versions must be kept in sync are not supported, since the automatic major update mechanism always only handles one crate at a time. A manual update and then comparing using `--git --from` is, however, possible.
 
+## Pinning dependencies
+Dependencies are considered "pinned" & not updated as major updates automatically if they're specified using `<`, `<=` or `=` semver operators. Pinning versions in the Cargo.lock is currently not possible.
+
 ## Usage
 ```
 Options:

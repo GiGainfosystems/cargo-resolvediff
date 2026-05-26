@@ -18,7 +18,8 @@ use tinyvec::{ArrayVec, array_vec};
 /// Major updates are defined as:
 /// * Versions that don't match the requirement,
 /// * which are not pre-releases,
-/// * which aren't explicitly matched against using `<` or `<=`,
+/// * happening on requirements that don't pin a dependency to earlier versions explicitly (`<`,
+///   `<=` or `=`),
 /// * for which no equal or later version is mentioned in any semver operation
 pub fn is_major_update_for(requirement: &VersionReq, version: &Version) -> bool {
     if requirement.matches(version) {
@@ -46,17 +47,11 @@ pub fn is_major_update_for(requirement: &VersionReq, version: &Version) -> bool 
         };
 
         match i.op {
-            semver::Op::Less | semver::Op::LessEq => {
-                if i_version == stripped_version {
-                    // This version was explicitly not matched against
-                    return false;
-                }
+            semver::Op::Exact | semver::Op::Less | semver::Op::LessEq => {
+                // This version was explicitly not matched against
+                return false;
             }
-            semver::Op::Exact
-            | semver::Op::Greater
-            | semver::Op::GreaterEq
-            | semver::Op::Tilde
-            | semver::Op::Caret => {
+            semver::Op::Greater | semver::Op::GreaterEq | semver::Op::Tilde | semver::Op::Caret => {
                 if i_version >= stripped_version {
                     return false;
                 }
