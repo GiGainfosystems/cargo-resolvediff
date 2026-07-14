@@ -2,7 +2,7 @@
 
 //! Utilities for editing `Cargo.toml` manifests
 
-use color_eyre::Result;
+use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item};
