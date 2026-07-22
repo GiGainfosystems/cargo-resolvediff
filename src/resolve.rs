@@ -7,7 +7,7 @@ use crate::Platform;
 use crate::indexed::IndexedMetadata;
 use camino::{Utf8Path, Utf8PathBuf};
 use cargo_metadata::PackageId;
-use color_eyre::Result;
+use anyhow::Result;
 use semver::Version;
 use serde::Serialize;
 use std::{
@@ -429,18 +429,18 @@ impl Resolved {
 
     /// Resolve everything for a given root manifest for the given set of platforms
     pub fn resolve_from_path(
-        root_cargo_toml: &Path,
+        root_directory: &Path,
         specific_platforms: impl IntoIterator<Item = Platform>,
         include_all_platforms: bool,
     ) -> Result<Self> {
         let mut included = itertools::process_results(
             specific_platforms
                 .into_iter()
-                .map(|platform| IndexedMetadata::gather(root_cargo_toml, Some(platform))),
+                .map(|platform| IndexedMetadata::gather(root_directory, Some(platform))),
             |iter| Self::resolve_from_indexed(iter),
         )?;
 
-        let full_metadata = IndexedMetadata::gather(root_cargo_toml, None)?;
+        let full_metadata = IndexedMetadata::gather(root_directory, None)?;
         let out = if include_all_platforms {
             Self::resolve_platform(&full_metadata, &mut included);
             Resolved {

@@ -2,8 +2,8 @@
 
 //! Git helpers for the application to add changes & commit them
 
-use crate::cmd::cmd;
-use color_eyre::Result;
+use crate::cmd::Command;
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 /// A `git` repository
@@ -23,19 +23,30 @@ impl Repository {
         Repository { path, dirty: false }
     }
 
+    fn cmd<const N: usize>(&self, cmd: [&str; N]) -> Command<'_> {
+        Command::builder()
+            .at_path_maybe(self.path.as_deref())
+            .cmd(cmd)
+    }
+
     /// `git add` a given path if it includes changes.
     pub fn add(&mut self, path: &Path) -> Result<()> {
-        let changed = !cmd!([git diff] ["-s" "--exit-code" "--" (path)] -> bool in &self.path)?;
+        let changed = !self
+            .cmd(["git", "diff"])
+            .arg(["-s", "--exit-code"])
+            .arg("--")
+            .arg(path)
+            .is_success()?;
         if changed {
             self.dirty = true;
-            cmd!([git add] [(path)] in &self.path)?;
+            self.cmd(["git", "add"]).arg(path).run()?;
         }
         Ok(())
     }
 
     /// Returns the current commit ID
     pub fn current_commit(&self) -> Result<String> {
-        cmd!([git "rev-parse"] [HEAD] -> String in &self.path)
+        self.cmd(["git", "rev-parse"]).arg("HEAD").stdout()
     }
 
     /// `git commit` everything that got added, if there were any changes, and return the commit
@@ -46,14 +57,14 @@ impl Repository {
         if !self.dirty {
             return Ok(None);
         }
-        cmd!([git commit] ["-m" (message)] in &self.path)?;
+        self.cmd(["git", "commit"]).arg(("-m", message)).run()?;
         self.dirty = false;
         Ok(Some(self.current_commit()?))
     }
 
     /// Returns the current branch, if any, or the current commit ID
     pub fn current_branch_or_commit(&self) -> Result<String> {
-        let branch = cmd!([git branch] ["--show-current"] -> String in &self.path)?;
+        let branch = self.cmd(["git", "branch"]).arg("--show-current").stdout()?;
         if !branch.is_empty() {
             Ok(branch)
         } else {
@@ -63,6 +74,6 @@ impl Repository {
 
     /// Checks out a given branch or commit ID
     pub fn checkout(&mut self, target: &str) -> Result<()> {
-        cmd!([git "checkout"] [(target)] in &self.path)
+        self.cmd(["git", "checkout"]).arg(target).run()
     }
 }

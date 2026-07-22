@@ -4,12 +4,10 @@
 // `cargo metadata` outside of parsing the source.
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use clap::Parser;
-use color_eyre::{
-    Result,
-    eyre::{Report, bail},
-};
+use anyhow::{Result, bail, anyhow};
 use crates_io_api::SyncClient;
 use semver::Version;
 use serde::Serialize;
@@ -21,7 +19,9 @@ use cargo_resolvediff::major_updates::{
     LatestVersion, ManifestDependencySet, fetch_latest_major_update_for,
 };
 use cargo_resolvediff::resolve::{Resolved, SpecificCrateIdent};
-use cargo_resolvediff::util::{host_platform, locate_project, update};
+use cargo_resolvediff::util::{
+    check, detect_toolchain, fetch, host_platform, locate_project, update,
+};
 
 struct OutputConfig {
     templated_output: bool,
@@ -330,9 +330,77 @@ struct Args {
     filter_to_platforms: bool,
     /// Run `cargo check` for updates
     ///
-    /// This may potentially not be desirable since it will run build dependencies.
+    /// This may potentially not be desirable since it will run build dependencies, though by
+    /// default these are sandboxed (see the `--no-check-sandbox` option and all `--sandbox-...`
+    /// options for configuring the sandbox and its details).
+    ///
+    /// Sandboxing requires the `--sandbox-rustwide-workspace` or `--sandbox-rustwide-workspace-tmp`
+    /// flag to be set.
     #[arg(short = 'c', long)]
     check: bool,
+    /// Require `check` to exit within this configured timeout (in seconds ('s') by default).
+    ///
+    /// This also supports the suffixes ms, min, h and d/day.
+    #[arg(long, requires("check"))]
+    check_timeout: Option<String>,
+    /// Run `cargo check` without a sandbox.
+    ///
+    /// `cargo check` will run build dependencies, but rustwide (the sandboxing solution used by
+    /// this program) requires Docker to work.
+    ///
+    /// You should probably not use this flag if you can't use sandboxing unless you're 100% sure
+    /// you're fine with running untrusted code in your environment.
+    #[arg(long, requires("check"))]
+    check_no_sandbox: bool,
+    /// The location of a permanent rustwide workspace.
+    ///
+    /// Notably this is NOT the source of the checked crate, and should not be contained therein
+    /// either (the crate source will be copied there, among other things).
+    #[arg(long, requires("check"))]
+    sandbox_rustwide_workspace: Option<PathBuf>,
+    /// Create a rustwide workspace in `/tmp`.
+    ///
+    /// Notably this will not work with `--sandbox-sibling-containers` unless `/tmp` was pointing to
+    /// a host directory.
+    #[arg(long, requires("check"), conflicts_with("sandbox_rustwide_workspace"))]
+    sandbox_rustwide_workspace_tmp: bool,
+    /// Use a local docker image for the rustwide sandbox
+    #[arg(long, requires("check"), conflicts_with("check_no_sandbox"))]
+    sandbox_image_local: Option<String>,
+    /// Use a remote docker image from a registry for the rustwide sandbox
+    #[arg(long, requires("check"), conflicts_with_all(["check_no_sandbox", "sandbox_image_local"]))]
+    sandbox_image_remote: Option<String>,
+    /// Prefer sandbox initialisation speed over runtime performance, by installing tools in the
+    /// docker image in debug mode for example. This may be useful in CI environments.
+    #[arg(long, requires("check"), conflicts_with("check_no_sandbox"))]
+    sandbox_fast_init: bool,
+    /// Use the hosts docker instance to create sibling containers for rustwide.
+    ///
+    /// This requires the docker socket (`/var/run/docker.sock`) to be mounted in the container this
+    /// application runs in, and furthermore requires that the workspace directory is mounted
+    /// somewhere in the host system, using workspaces created in a container is not supported.
+    #[arg(long, requires("check"), conflicts_with("check_no_sandbox"))]
+    sandbox_sibling_containers: bool,
+    /// The rustup profile to use when installing toolchains in rustwide. The default is `minimal`.
+    #[arg(long, requires("check"), conflicts_with("check_no_sandbox"))]
+    sandbox_rustup_profile: Option<String>,
+    /// Set a memory limit for the sandbox container.
+    ///
+    /// Set as a number with an optional suffix (default is in bytes (B), as well as K, M, G, T or
+    /// KB/KiB etc)
+    #[arg(long, requires("check"), conflicts_with("check_no_sandbox"))]
+    sandbox_memory_limit: Option<String>,
+    /// Set a CPU limit for the sandbox container as a (fractional) number of cores (ie 0.5 is half
+    /// a core).
+    #[arg(long, requires("check"), conflicts_with("check_no_sandbox"))]
+    sandbox_cpu_limit: Option<f32>,
+    /// Restrict the sandbox container to specific CPU IDs as a range split by '-' (translates to
+    /// Dockers `--cpuset-cpus x-x`), ie `0-1` to select cores 0 & 1.
+    #[arg(long, requires("check"), conflicts_with("check_no_sandbox"))]
+    sandbox_cpuset_cpus: Option<String>,
+    /// Enable network access in the sandbox container.
+    #[arg(long, requires("check"), conflicts_with("check_no_sandbox"))]
+    sandbox_enable_networking: bool,
     /// Do major updates (this edits `Cargo.toml` files)
     #[arg(short = 'm', long, requires("git"))]
     major: bool,
@@ -364,7 +432,7 @@ struct Args {
     /// Same as `--templated`, but render the templates into strings in a JSON object with more
     /// information
     ///
-    /// This is also compatible with `--major` _and_.
+    /// This is also compatible with `--major`.
     #[arg(long, conflicts_with_all(["templated", "templated_as_squashed"]))]
     templated_in_json: bool,
     /// The path to a directory containing minijinja templates
@@ -402,21 +470,57 @@ enum Task {
     },
 }
 
-struct AppContext {
-    manifest_path: PathBuf,
+struct RunCheck<'a, 'b> {
+    sandbox: Option<&'a rustwide::Build<'b>>,
+    timeout: Option<Duration>,
+}
+
+struct AppContext<'a, 'b> {
+    manifest_directory: PathBuf,
     lock_path: PathBuf,
     platforms: Vec<Platform>,
     include_all_platforms: bool,
-    check: bool,
+    check: Option<RunCheck<'a, 'b>>,
     repository: Option<Repository>,
     output: OutputConfig,
     task: Task,
 }
 
-impl TryFrom<Args> for AppContext {
-    type Error = Report;
+fn parse_suffixes(mut input: &str, suffixes: &[(&str, f64)]) -> Result<f64> {
+    let mut out = 0.;
+    while let Some(suffix_start) = input.find(|c| !matches!(c, '0'..='9' | '.')) {
+        let (number, suffix_rest) = input.split_at(suffix_start);
+        let (suffix, rest) = suffix_rest
+            .find(|c| matches!(c, '0'..='9' | '.' | ' '))
+            .map_or((suffix_rest, ""), |idx| suffix_rest.split_at(idx));
+        input = rest.trim();
 
-    fn try_from(args: Args) -> Result<Self> {
+        let number = number.parse::<f64>()?;
+        let (_, suffix_value) = suffixes
+            .iter()
+            .scan(1., |accumulated_value, (name, value)| {
+                *accumulated_value *= value;
+                Some((name, *accumulated_value))
+            })
+            .find(|(name, _)| suffix.eq_ignore_ascii_case(name))
+            .ok_or_else(|| anyhow!("Unknown suffix {suffix:?}"))?;
+
+        out += number * suffix_value;
+    }
+
+    if input.is_empty() {
+        Ok(out)
+    } else {
+        Ok(out + input.parse::<f64>()?)
+    }
+}
+
+/// Create a context
+impl AppContext<'_, '_> {
+    fn with_context_from<T>(
+        args: Args,
+        f: impl FnOnce(AppContext<'_, '_>) -> Result<T>,
+    ) -> Result<T> {
         let manifest_path = args.manifest_path.map_or_else(locate_project, Ok)?;
         if manifest_path.extension() != Some("toml".as_ref()) {
             bail!("A manifest path should in \".toml\", found {manifest_path:?}");
@@ -424,19 +528,69 @@ impl TryFrom<Args> for AppContext {
 
         let lock_path = manifest_path.with_extension("lock");
 
+        let mut manifest_directory = manifest_path.canonicalize()?;
+        assert!(manifest_directory.pop(), "there was a file name");
+
         let platforms = if args.platform.is_empty() {
             vec![host_platform()?]
         } else {
             args.platform.into_iter().map(Platform).collect::<Vec<_>>()
         };
 
-        let mut repository = args.git.then(|| {
-            let repository_path = manifest_path.parent().expect("there was a file name");
-            // We might already be in the directory with the `Cargo.toml`, in which case `git`
-            // commands can run here:
-            let repository_path = (repository_path != "").then(|| repository_path.to_owned());
-            Repository::new(repository_path)
-        });
+        let check_timeout = args
+            .check_timeout
+            .map(|s| {
+                parse_suffixes(
+                    &s,
+                    &[
+                        ("ms", 0.001),
+                        ("s", 1000.),
+                        ("min", 60.),
+                        ("h", 60.),
+                        ("d", 24.),
+                        ("day", 1.),
+                    ],
+                )
+            })
+            .transpose()?
+            .map(Duration::from_secs_f64);
+
+        let sandbox_memory_limit = args
+            .sandbox_memory_limit
+            .map(|s| {
+                parse_suffixes(
+                    &s,
+                    &[
+                        ("b", 1.),
+                        ("k", 1024.),
+                        ("kb", 1.),
+                        ("kib", 1.),
+                        ("m", 1024.),
+                        ("mb", 1.),
+                        ("mib", 1.),
+                        ("g", 1024.),
+                        ("gb", 1.),
+                        ("gib", 1.),
+                        ("t", 1024.),
+                        ("tb", 1.),
+                        ("tib", 1.),
+                    ],
+                )
+            })
+            .transpose()?
+            .map(|float| float as usize);
+
+        let sandbox_cpuset_cpus = args
+            .sandbox_cpuset_cpus
+            .map(|range| -> Result<_> {
+                let (lower, upper) = range.split_once("-").unwrap_or((&range, &range));
+                Ok(lower.parse::<usize>()?..=upper.parse()?)
+            })
+            .transpose()?;
+
+        let mut repository = args
+            .git
+            .then(|| Repository::new(Some(manifest_directory.clone())));
 
         let output = OutputConfig {
             templated_output: args.templated || args.templated_as_squashed,
@@ -463,16 +617,96 @@ impl TryFrom<Args> for AppContext {
             Task::Minor
         };
 
-        Ok(AppContext {
-            manifest_path,
+        let ctx = AppContext {
+            manifest_directory,
             lock_path,
             platforms,
             include_all_platforms: !args.filter_to_platforms,
-            check: args.check,
+            check: None, // filled below
             repository,
             output,
             task,
-        })
+        };
+
+        if args.check {
+            if !args.check_no_sandbox {
+                eprintln!("Building workspace");
+
+                let tmp_dir;
+                let rustwide_dir = if let Some(ref dir) = args.sandbox_rustwide_workspace {
+                    dir
+                } else if args.sandbox_rustwide_workspace_tmp {
+                    tmp_dir = tempfile::tempdir()?;
+                    tmp_dir.path()
+                } else {
+                    bail!(
+                        "Sandboxing requires --sandbox-rustwide-workspace \
+                         or --sandbox-rustwide-workspace-tmp",
+                    );
+                };
+
+                let mut builder =
+                    rustwide::WorkspaceBuilder::new(rustwide_dir, "cargo-resolvediff")
+                        .fast_init(args.sandbox_fast_init)
+                        .running_inside_docker(args.sandbox_sibling_containers);
+
+                if let Some(local) = args.sandbox_image_local {
+                    builder = builder.sandbox_image(rustwide::cmd::SandboxImage::local(&local)?);
+                } else if let Some(remote) = args.sandbox_image_remote {
+                    builder = builder.sandbox_image(rustwide::cmd::SandboxImage::remote(&remote)?);
+                }
+
+                if let Some(profile) = args.sandbox_rustup_profile {
+                    builder = builder.rustup_profile(&profile);
+                }
+
+                let workspace = builder.init()?;
+
+                let name = ctx
+                    .manifest_directory
+                    .file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .unwrap_or("project");
+                let random = uuid::Uuid::new_v4();
+                let mut build_dir = workspace.build_dir(&format!("{name}-{random}"));
+
+                let sandbox = rustwide::cmd::SandboxBuilder::new()
+                    .memory_limit(sandbox_memory_limit)
+                    .cpu_limit(args.sandbox_cpu_limit)
+                    .cpuset_cpus(sandbox_cpuset_cpus)
+                    .enable_networking(args.sandbox_enable_networking);
+
+                let toolchain =
+                    rustwide::Toolchain::dist(&detect_toolchain(&ctx.manifest_directory)?);
+                let krate = rustwide::Crate::local(&ctx.manifest_directory);
+                krate.fetch(&workspace)?;
+
+                let out = build_dir
+                    .build(&toolchain, &krate, sandbox)
+                    .run(|sandbox| {
+                        Ok(f(AppContext {
+                            check: Some(RunCheck {
+                                sandbox: Some(sandbox),
+                                timeout: check_timeout,
+                            }),
+                            ..ctx
+                        }))
+                    })
+                    .and_then(|result| result.into_inner());
+
+                build_dir.purge().and(out)
+            } else {
+                f(AppContext {
+                    check: Some(RunCheck {
+                        sandbox: None,
+                        timeout: check_timeout,
+                    }),
+                    ..ctx
+                })
+            }
+        } else {
+            f(ctx)
+        }
     }
 }
 
@@ -549,13 +783,28 @@ struct MajorUpdates {
     failed_major_updates: Vec<SpecificCrateIdent>,
 }
 
-impl AppContext {
-    fn try_update(&self) -> Result<bool> {
-        update(&self.manifest_path, self.check)
+/// Implementation of the actual program
+impl AppContext<'_, '_> {
+    fn try_update_lockfile_and_check(&self) -> Result<bool> {
+        if !fetch(&self.manifest_directory)? {
+            return Ok(false);
+        }
+
+        if let Some(ref run_check) = self.check {
+            check(
+                &self.manifest_directory,
+                run_check.sandbox,
+                run_check.timeout,
+            )
+        } else {
+            Ok(true)
+        }
     }
 
     fn minor_update(&self) -> Result<()> {
-        if !self.try_update()? {
+        eprintln!("Doing minor updates");
+
+        if !update(&self.manifest_directory)? || !self.try_update_lockfile_and_check()? {
             bail!("Minor updates failed");
         }
 
@@ -563,8 +812,9 @@ impl AppContext {
     }
 
     fn resolve(&self) -> Result<Resolved> {
+        eprintln!("Collecting cargo resolution metadata");
         Resolved::resolve_from_path(
-            &self.manifest_path,
+            &self.manifest_directory,
             self.platforms.iter().cloned(),
             self.include_all_platforms,
         )
@@ -602,13 +852,15 @@ impl AppContext {
         major_ctx.manifest_deps.commit()?;
 
         for package in direct_dependencies {
+            eprintln!("Updating {package}");
+
             major_ctx.manifest_deps.roll_back()?;
 
             let Some(package) = major_ctx.update_for(package)? else {
                 continue;
             };
 
-            if !self.try_update()? {
+            if !self.try_update_lockfile_and_check()? {
                 failed_major_updates.push(package);
                 continue;
             };
@@ -665,19 +917,24 @@ impl AppContext {
 
         major_ctx.manifest_deps.commit()?;
         for package in direct_dependencies {
+            eprintln!("Checking {package}");
+
             major_ctx.manifest_deps.roll_back()?;
 
             let Some(package) = major_ctx.update_for(package)? else {
+                eprintln!("Skipping, since there are no relevant updates");
                 continue;
             };
 
-            if !self.try_update()? {
+            if !self.try_update_lockfile_and_check()? {
                 failed_major_updates.push(package);
+                eprintln!("Failed");
                 continue;
             };
 
             major_ctx.manifest_deps.commit()?;
             major_updates.push(package);
+            eprintln!("Succeeded");
         }
 
         self.minor_update()?;
@@ -732,22 +989,20 @@ impl AppContext {
 }
 
 fn main() -> Result<()> {
-    color_eyre::install()?;
+    AppContext::with_context_from(Args::parse(), |mut ctx| {
+        let out = match ctx.task.clone() {
+            Task::Minor => ctx.minor_update_task()?.1,
+            Task::Major => ctx.major_update_task()?,
+            Task::Squashed => ctx.squashed_update_task()?,
+            Task::Git {
+                from,
+                to,
+                return_to,
+            } => ctx.git_task(&from, &to, &return_to)?,
+        };
 
-    let mut ctx = AppContext::try_from(Args::parse())?;
+        ctx.output.final_output(&out)?;
 
-    let out = match ctx.task.clone() {
-        Task::Minor => ctx.minor_update_task()?.1,
-        Task::Major => ctx.major_update_task()?,
-        Task::Squashed => ctx.squashed_update_task()?,
-        Task::Git {
-            from,
-            to,
-            return_to,
-        } => ctx.git_task(&from, &to, &return_to)?,
-    };
-
-    ctx.output.final_output(&out)?;
-
-    Ok(())
+        Ok(())
+    })
 }

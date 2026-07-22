@@ -7,7 +7,7 @@ use std::{collections::HashMap, path::Path};
 use crate::Platform;
 use camino::Utf8PathBuf;
 use cargo_metadata::{MetadataCommand, Node, Package, PackageId};
-use color_eyre::Result;
+use anyhow::Result;
 
 /// The indexed output of `cargo metadata`
 #[derive(Debug)]
@@ -42,7 +42,7 @@ impl IndexedMetadata {
         other_options.push("--locked".to_owned());
 
         let data = MetadataCommand::new()
-            .manifest_path(path)
+            .current_dir(path)
             .other_options(other_options)
             .exec()?;
 

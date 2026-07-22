@@ -6,7 +6,7 @@ use crate::{
     indexed::IndexedMetadata,
     toml_edit::{MutableTomlFile, TomlPathLookup},
 };
-use color_eyre::{Result, eyre::eyre};
+use anyhow::{Result, anyhow};
 use crates_io_api::SyncClient;
 use itertools::Itertools;
 use semver::{Version, VersionReq};
@@ -162,7 +162,7 @@ impl ManifestDependencySet {
             .get("target")
             .map(|target| {
                 target.as_table_like().ok_or_else(|| {
-                    eyre!("Invalid target table in {:?} at `target`", manifest.path())
+                    anyhow!("Invalid target table in {:?} at `target`", manifest.path())
                 })
             })
             .transpose()?
@@ -189,7 +189,7 @@ impl ManifestDependencySet {
             .expect("Version path lookup failed (maybe the `MutableTomlFile` changed?)")
             .as_str()
             .ok_or_else(|| {
-                eyre!(
+                anyhow!(
                     "Invalid `version`/immediate value in {path:?} at {:?}",
                     manifest.path()
                 )
@@ -210,7 +210,7 @@ impl ManifestDependencySet {
             };
 
             let dependencies = dependencies.as_table_like().ok_or_else(|| {
-                eyre!(
+                anyhow!(
                     "Invalid dependency table in {:?} at {dep_path}",
                     manifest.path()
                 )
@@ -222,7 +222,7 @@ impl ManifestDependencySet {
                         let package = match dependency.get("package") {
                             None => name,
                             Some(package) => package.as_str().ok_or_else(|| {
-                                eyre!(
+                                anyhow!(
                                     "Invalid `package` value in {:?} at {dep_path}.{name:?}",
                                     manifest.path()
                                 )
@@ -321,7 +321,7 @@ impl ManifestDependencySet {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(eyre!("Failed to roll back:\n{errors:?}"))
+            Err(anyhow!("Failed to roll back:\n{errors:?}"))
         }
     }
 }
