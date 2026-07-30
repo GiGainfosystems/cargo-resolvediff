@@ -262,7 +262,7 @@ impl<'a> Diff<'a> {
         };
 
         let filtered_added = in_right_set(&old.filtered, &new.filtered);
-        let filtered_removed = in_right_set(&old.filtered, &new.filtered);
+        let filtered_removed = in_right_set(&new.filtered, &old.filtered);
 
         Diff {
             added,
