@@ -5,9 +5,9 @@
 use std::{collections::HashMap, path::Path};
 
 use crate::Platform;
+use anyhow::Result;
 use camino::Utf8PathBuf;
 use cargo_metadata::{MetadataCommand, Node, Package, PackageId};
-use anyhow::Result;
 
 /// The indexed output of `cargo metadata`
 #[derive(Debug)]

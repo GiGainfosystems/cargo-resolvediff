@@ -3,7 +3,7 @@
 //! See the documentation of [`Command`], a utility type for running commands (in this case `git`,
 //! `cargo` and `rustc`).
 
-use anyhow::{Result, bail, anyhow, Error};
+use anyhow::{Error, Result, anyhow, bail};
 use std::ffi::{OsStr, OsString};
 use std::fmt::Write;
 use std::iter;
