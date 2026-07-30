@@ -91,6 +91,14 @@ pub struct Diff<'a> {
     pub filtered_removed: Vec<SpecificCrateIdent>,
 }
 
+fn version_diff(a: &Version, b: &Version) -> (u64, u64, u64) {
+    (
+        a.major.abs_diff(b.major),
+        a.minor.abs_diff(b.minor),
+        a.patch.abs_diff(b.patch),
+    )
+}
+
 impl<'a> Diff<'a> {
     fn compare(
         name: &'a str,
@@ -100,11 +108,22 @@ impl<'a> Diff<'a> {
     ) -> Comparison<'a> {
         // NOTE: The assumption is that checking for removals is probably usually easier,
         // so giving out downgrades for reviews is preferred:
-        let (closest_old_version, closest_old_info) =
-            old.range(&new_version..).next().unwrap_or_else(|| {
-                old.last_key_value()
-                    .expect("Higher ones were already checked, version set is never empty")
-            });
+        let old_this = old.get_key_value(&new_version);
+        let old_prev = old.range(..&new_version).next_back();
+        let old_next = old.range(&new_version..).next();
+        let (closest_old_version, closest_old_info) = match (old_this, old_prev, old_next) {
+            (None, Some(prev), Some(next)) => {
+                if version_diff(prev.0, &new_version) <= version_diff(next.0, &new_version) {
+                    prev
+                } else {
+                    next
+                }
+            }
+            (Some(out), _, _) | (None, Some(out), None) | (None, None, Some(out)) => out,
+            (None, None, None) => unreachable!(
+                "There should be different versions if it wasn't added or stayed the same"
+            ),
+        };
 
         let closest_different_old_version =
             (*closest_old_version != new_version).then(|| closest_old_version.clone());
