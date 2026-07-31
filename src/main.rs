@@ -3,6 +3,7 @@
 // NOTE: This doesn't handle `git` dependencies currently, as they cannot really be detected in
 // `cargo metadata` outside of parsing the source.
 use std::collections::{BTreeMap, HashMap};
+use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -22,6 +23,9 @@ use cargo_resolvediff::resolve::{Resolved, SpecificCrateIdent};
 use cargo_resolvediff::util::{
     check, detect_toolchain, fetch, host_platform, locate_project, update,
 };
+
+const TEMPLATING_ENV_PREFIX: &str = "resolvediff_env_";
+const TEMPLATING_ENV_VAR_PREFIX: &str = "env_";
 
 struct OutputConfig {
     templated_output: bool,
@@ -83,7 +87,7 @@ impl OutputConfig {
 
     fn init_jinja(
         platforms: &[Platform],
-        path: Option<PathBuf>,
+        path: Option<&Path>,
     ) -> Result<minijinja::Environment<'static>> {
         let mut jinja = minijinja::Environment::new();
 
@@ -91,7 +95,7 @@ impl OutputConfig {
             let mapping = platforms
                 .iter()
                 .map(|platform| {
-                    let short = if let Some((short, _)) = platform.0.rsplit_once("-")
+                    let short = if let Some((short, _)) = platform.0.rsplit_once('-')
                         && !platforms
                             .iter()
                             .any(|other| platform != other && other.0.starts_with(short))
@@ -108,7 +112,7 @@ impl OutputConfig {
 
         jinja.add_filter("short_platform", short_platform);
 
-        if let Some(ref path) = path {
+        if let Some(path) = path {
             if !path.is_dir() {
                 bail!("Template directory doesn't exist");
             }
@@ -117,7 +121,7 @@ impl OutputConfig {
         }
 
         for (name, template) in Self::DEFAULT_TEMPLATES {
-            if let Some(ref path) = path
+            if let Some(path) = path
                 && path.join(name).is_file()
             {
                 // Template exists
@@ -126,6 +130,28 @@ impl OutputConfig {
             }
 
             jinja.add_template(name, template)?;
+        }
+
+        for (name, value) in env::vars_os() {
+            let Ok(mut name) = name.into_string() else {
+                continue;
+            };
+
+            if !name
+                .get(..TEMPLATING_ENV_PREFIX.len())
+                .is_some_and(|s| s.eq_ignore_ascii_case(TEMPLATING_ENV_PREFIX))
+            {
+                continue;
+            }
+
+            let Ok(value) = value.into_string() else {
+                eprintln!("Warning: The environment variable {name:?} isn't valid unicode");
+                continue;
+            };
+
+            name.replace_range(..TEMPLATING_ENV_PREFIX.len(), TEMPLATING_ENV_VAR_PREFIX);
+
+            jinja.add_global(name, value);
         }
 
         Ok(jinja)
@@ -454,6 +480,12 @@ struct Args {
     ///
     /// Extra functions implemented:
     /// * `short_platform` (filter): Removes the last segment if it remains unique, and all `unknown` segments from platform tuples
+    ///
+    /// Environment variables beginning with `RESOLVEDIFF_ENV_` (case insensitive) are also added as
+    /// global variables with the `env_` prefix instead.
+    /// The default template uses this to display the CI job that created a given update, using the
+    /// `RESOLVEDIFF_ENV_CI_JOB_ID` and `RESOLVEDIFF_ENV_CI_JOB_URL` variables (both of which need
+    /// to be present).
     #[arg(short = 'T', long, verbatim_doc_comment)]
     template_path: Option<PathBuf>,
 }
@@ -596,7 +628,7 @@ impl AppContext<'_, '_> {
             templated_output: args.templated || args.templated_as_squashed,
             templated_major_as_squashed: args.templated_as_squashed,
             templated_in_json: args.templated_in_json,
-            jinja: OutputConfig::init_jinja(&platforms, args.template_path)?,
+            jinja: OutputConfig::init_jinja(&platforms, args.template_path.as_deref())?,
         };
 
         let task = if args.major {

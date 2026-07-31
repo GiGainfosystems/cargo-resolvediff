@@ -188,6 +188,12 @@ Options:
           * `short_platform` (filter): Removes the last segment if it remains unique,
             and all `unknown` segments from platform tuples
 
+          Environment variables beginning with `RESOLVEDIFF_ENV_` (case insensitive)
+          are also added as global variables with the `env_` prefix instead.
+          The default template uses this to display the CI job that created a given update,
+          using the `RESOLVEDIFF_ENV_CI_JOB_ID` and `RESOLVEDIFF_ENV_CI_JOB_URL` variables
+          (both of which need to be present).
+
   -h, --help
           Print help (see a summary with '-h')
 
