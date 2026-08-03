@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use anyhow::{Result, anyhow, bail};
 use clap::Parser;
-use anyhow::{Result, bail, anyhow};
 use crates_io_api::SyncClient;
 use semver::Version;
 use serde::Serialize;

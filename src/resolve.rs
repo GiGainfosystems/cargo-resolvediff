@@ -5,9 +5,9 @@
 
 use crate::Platform;
 use crate::indexed::IndexedMetadata;
+use anyhow::Result;
 use camino::{Utf8Path, Utf8PathBuf};
 use cargo_metadata::PackageId;
-use anyhow::Result;
 use semver::Version;
 use serde::Serialize;
 use std::{
