@@ -946,6 +946,7 @@ impl AppContext<'_> {
             last = &last_owned;
         }
 
+        major_ctx.manifest_deps.roll_back()?;
         let (last, minor) = self.minor_update_task()?;
 
         let squashed_diff = Diff::between(&first, &last);
@@ -991,6 +992,7 @@ impl AppContext<'_> {
             eprintln!("Succeeded");
         }
 
+        major_ctx.manifest_deps.roll_back()?;
         self.minor_update()?;
 
         let after = self.resolve()?;
