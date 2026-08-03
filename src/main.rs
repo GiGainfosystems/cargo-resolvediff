@@ -502,17 +502,45 @@ enum Task {
     },
 }
 
-struct RunCheck<'a, 'b> {
-    sandbox: Option<&'a rustwide::Build<'b>>,
+struct Sandbox<'a> {
+    build_dir: &'a mut rustwide::BuildDirectory,
+    toolchain: rustwide::Toolchain,
+    krate: rustwide::Crate,
+    sandbox: rustwide::cmd::SandboxBuilder,
+}
+
+impl Sandbox<'_> {
+    fn run<O>(&mut self, f: impl FnOnce(&rustwide::Build<'_>) -> Result<O>) -> Result<O> {
+        let out = self
+            .build_dir
+            .build(&self.toolchain, &self.krate, self.sandbox.clone())
+            .run(f)?
+            .into_inner();
+        Ok(out)
+    }
+
+    fn run_maybe_sandboxed<O>(
+        this: Option<&mut Self>,
+        f: impl FnOnce(Option<&rustwide::Build<'_>>) -> Result<O>,
+    ) -> Result<O> {
+        match this {
+            None => f(None),
+            Some(sandbox) => sandbox.run(|build| f(Some(build))),
+        }
+    }
+}
+
+struct RunCheck<'a> {
+    sandbox: Option<Sandbox<'a>>,
     timeout: Option<Duration>,
 }
 
-struct AppContext<'a, 'b> {
+struct AppContext<'a> {
     manifest_directory: PathBuf,
     lock_path: PathBuf,
     platforms: Vec<Platform>,
     include_all_platforms: bool,
-    check: Option<RunCheck<'a, 'b>>,
+    check: Option<RunCheck<'a>>,
     repository: Option<Repository>,
     output: OutputConfig,
     task: Task,
@@ -548,11 +576,8 @@ fn parse_suffixes(mut input: &str, suffixes: &[(&str, f64)]) -> Result<f64> {
 }
 
 /// Create a context
-impl AppContext<'_, '_> {
-    fn with_context_from<T>(
-        args: Args,
-        f: impl FnOnce(AppContext<'_, '_>) -> Result<T>,
-    ) -> Result<T> {
+impl AppContext<'_> {
+    fn with_context_from<T>(args: Args, f: impl FnOnce(AppContext<'_>) -> Result<T>) -> Result<T> {
         let manifest_path = args.manifest_path.map_or_else(locate_project, Ok)?;
         if manifest_path.extension() != Some("toml".as_ref()) {
             bail!("A manifest path should in \".toml\", found {manifest_path:?}");
@@ -711,20 +736,19 @@ impl AppContext<'_, '_> {
                 let toolchain =
                     rustwide::Toolchain::dist(&detect_toolchain(&ctx.manifest_directory)?);
                 let krate = rustwide::Crate::local(&ctx.manifest_directory);
-                krate.fetch(&workspace)?;
 
-                let out = build_dir
-                    .build(&toolchain, &krate, sandbox)
-                    .run(|sandbox| {
-                        Ok(f(AppContext {
-                            check: Some(RunCheck {
-                                sandbox: Some(sandbox),
-                                timeout: check_timeout,
-                            }),
-                            ..ctx
-                        }))
-                    })
-                    .and_then(|result| result.into_inner());
+                let out = f(AppContext {
+                    check: Some(RunCheck {
+                        sandbox: Some(Sandbox {
+                            build_dir: &mut build_dir,
+                            toolchain,
+                            krate,
+                            sandbox,
+                        }),
+                        timeout: check_timeout,
+                    }),
+                    ..ctx
+                });
 
                 build_dir.purge().and(out)
             } else {
@@ -816,24 +840,22 @@ struct MajorUpdates {
 }
 
 /// Implementation of the actual program
-impl AppContext<'_, '_> {
-    fn try_update_lockfile_and_check(&self) -> Result<bool> {
+impl AppContext<'_> {
+    fn try_update_lockfile_and_check(&mut self) -> Result<bool> {
         if !fetch(&self.manifest_directory)? {
             return Ok(false);
         }
 
-        if let Some(ref run_check) = self.check {
-            check(
-                &self.manifest_directory,
-                run_check.sandbox,
-                run_check.timeout,
-            )
+        if let Some(ref mut run_check) = self.check {
+            Sandbox::run_maybe_sandboxed(run_check.sandbox.as_mut(), |build| {
+                check(&self.manifest_directory, build, run_check.timeout)
+            })
         } else {
             Ok(true)
         }
     }
 
-    fn minor_update(&self) -> Result<()> {
+    fn minor_update(&mut self) -> Result<()> {
         eprintln!("Doing minor updates");
 
         if !update(&self.manifest_directory)? || !self.try_update_lockfile_and_check()? {
@@ -924,6 +946,7 @@ impl AppContext<'_, '_> {
             last = &last_owned;
         }
 
+        major_ctx.manifest_deps.roll_back()?;
         let (last, minor) = self.minor_update_task()?;
 
         let squashed_diff = Diff::between(&first, &last);
@@ -969,6 +992,7 @@ impl AppContext<'_, '_> {
             eprintln!("Succeeded");
         }
 
+        major_ctx.manifest_deps.roll_back()?;
         self.minor_update()?;
 
         let after = self.resolve()?;
