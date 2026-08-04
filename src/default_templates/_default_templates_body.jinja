@@ -44,7 +44,7 @@ None of the included package versions changed.
 - {{ cratesio(removed) }}
     {%- endfor -%}
 {%- endif -%}
-{%- if env_ci_job_url and env_ci_job_id %}
+{%- if env_CI_JOB_ID and env_CI_JOB_URL %}
 
 Generated in CI Job [{{ env_CI_JOB_ID }}]({{ env_CI_JOB_URL }})
 {%- endif %}
