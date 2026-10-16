@@ -177,7 +177,8 @@ impl ManifestDependencySet {
                     array_vec!(_ => dep_kind),
                     |target| array_vec!(_ => "target", target, dep_kind),
                 )
-            });
+            })
+            .chain(iter::once(array_vec!(_ => "workspace", "dependencies")));
 
         Ok(dep_paths)
     }
