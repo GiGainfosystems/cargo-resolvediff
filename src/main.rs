@@ -453,7 +453,7 @@ struct Args {
     templated: bool,
     /// Same as `--templated`, but use the squashed template format by taking a diff over all
     /// changes
-    #[arg(short, long, requires("major"), conflicts_with("templated"))]
+    #[arg(long, requires("major"), conflicts_with("templated"))]
     templated_as_squashed: bool,
     /// Same as `--templated`, but render the templates into strings in a JSON object with more
     /// information
