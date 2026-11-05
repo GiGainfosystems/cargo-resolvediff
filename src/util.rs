@@ -2,6 +2,7 @@
 
 //! Various utility functions associated with this crate
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -29,15 +30,22 @@ pub fn check(
     path: &Path,
     sandbox: Option<&rustwide::Build<'_>>,
     timeout: Option<Duration>,
+    env: &BTreeMap<String, String>,
 ) -> Result<bool> {
     let no_sandbox = sandbox.is_none();
-    Command::builder()
+
+    let mut cmd = Command::builder()
         .in_sandbox_maybe(sandbox)
         .with_timeout_maybe(timeout)
         .at_path_maybe(no_sandbox.then_some(path))
         .cmd(["cargo", "check"])
-        .arg("--all-targets")
-        .is_success()
+        .arg("--all-targets");
+
+    for (k, v) in env {
+        cmd = cmd.env(k, v);
+    }
+
+    cmd.is_success()
 }
 
 /// Locate the root `Cargo.toml` from the current working directory

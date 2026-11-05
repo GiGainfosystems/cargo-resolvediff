@@ -7,11 +7,11 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use crates_io_api::SyncClient;
 use semver::Version;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use cargo_resolvediff::Platform;
 use cargo_resolvediff::diff::Diff;
@@ -427,6 +427,13 @@ struct Args {
     /// Enable network access in the sandbox container.
     #[arg(long, requires("check"), conflicts_with("check_no_sandbox"))]
     sandbox_enable_networking: bool,
+    /// Environment variable to pass to `cargo check`, as `NAME=value`
+    /// (ie `--env FOO=bar --env ANOTHER=value`)
+    ///
+    /// By default this also attempts to find `.cargo/config.toml`s and add their environment
+    /// variables as well.
+    #[arg(long, requires("check"))]
+    env: Vec<String>,
     /// Do major updates (this edits `Cargo.toml` files)
     #[arg(short = 'm', long, requires("git"))]
     major: bool,
@@ -533,6 +540,7 @@ impl Sandbox<'_> {
 struct RunCheck<'a> {
     sandbox: Option<Sandbox<'a>>,
     timeout: Option<Duration>,
+    env: BTreeMap<String, String>,
 }
 
 struct AppContext<'a> {
@@ -573,6 +581,56 @@ fn parse_suffixes(mut input: &str, suffixes: &[(&str, f64)]) -> Result<f64> {
     } else {
         Ok(out + input.parse::<f64>()?)
     }
+}
+
+fn gather_env(args: Vec<String>, manifest_directory: PathBuf) -> Result<BTreeMap<String, String>> {
+    let mut env: BTreeMap<String, String> = args
+        .into_iter()
+        .map(|item| {
+            let (l, r) = item
+                .split_once('=')
+                .ok_or_else(|| anyhow!("Invalid `env` argument: {item:?}"))?;
+            Ok((l.to_owned(), r.to_owned()))
+        })
+        .collect::<Result<BTreeMap<String, String>>>()?;
+
+    let mut config_path = manifest_directory;
+    loop {
+        config_path.push(".cargo");
+        config_path.push("config.toml");
+
+        if config_path.exists() {
+            #[derive(Deserialize)]
+            struct CargoConfig {
+                env: BTreeMap<String, String>,
+            }
+
+            let Ok(config) = std::fs::read_to_string(&config_path) else {
+                eprintln!("Couldn't read `{}`", config_path.display());
+                continue;
+            };
+
+            let mut new_env = toml_edit::de::from_str::<CargoConfig>(&config)
+                .context("`.cargo/config.toml` couldn't be deserialized")?
+                .env;
+            // `.append` overwrites entries, so this gives precedence to `--env` CLI
+            // arguments:
+            new_env.append(&mut env);
+            env = new_env;
+
+            break;
+        }
+
+        // remove `.cargo/config.toml`
+        config_path.pop();
+        config_path.pop();
+        // recurse into parent directory:
+        if !config_path.pop() {
+            break;
+        }
+    }
+
+    Ok(env)
 }
 
 /// Create a context
@@ -675,7 +733,7 @@ impl AppContext<'_> {
         };
 
         let ctx = AppContext {
-            manifest_directory,
+            manifest_directory: manifest_directory.clone(),
             lock_path,
             platforms,
             include_all_platforms: !args.filter_to_platforms,
@@ -686,6 +744,8 @@ impl AppContext<'_> {
         };
 
         if args.check {
+            let env = gather_env(args.env, manifest_directory)?;
+
             if !args.check_no_sandbox {
                 eprintln!("Building workspace");
 
@@ -746,6 +806,7 @@ impl AppContext<'_> {
                             sandbox,
                         }),
                         timeout: check_timeout,
+                        env,
                     }),
                     ..ctx
                 });
@@ -756,6 +817,7 @@ impl AppContext<'_> {
                     check: Some(RunCheck {
                         sandbox: None,
                         timeout: check_timeout,
+                        env,
                     }),
                     ..ctx
                 })
@@ -848,7 +910,12 @@ impl AppContext<'_> {
 
         if let Some(ref mut run_check) = self.check {
             Sandbox::run_maybe_sandboxed(run_check.sandbox.as_mut(), |build| {
-                check(&self.manifest_directory, build, run_check.timeout)
+                check(
+                    &self.manifest_directory,
+                    build,
+                    run_check.timeout,
+                    &run_check.env,
+                )
             })
         } else {
             Ok(true)
