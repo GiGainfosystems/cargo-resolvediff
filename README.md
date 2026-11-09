@@ -75,7 +75,7 @@ Options:
 
           Notably this is NOT the source of the checked crate,
           and should not be contained therein either
-          (the crate source will be copied there, among other things)
+          (the crate source will be copied there, among other things).
 
       --sandbox-rustwide-workspace-tmp
           Create a rustwide workspace in `/tmp`.
@@ -100,7 +100,7 @@ Options:
           This requires the docker socket (`/var/run/docker.sock`) to be mounted
           in the container this application runs in,
           and furthermore requires that the workspace directory is mounted somewhere
-          in the host system, using workspaces created in a container is not supported
+          in the host system, using workspaces created in a container is not supported.
 
       --sandbox-rustup-profile <SANDBOX_RUSTUP_PROFILE>
           The rustup profile to use when installing toolchains in rustwide.
@@ -122,6 +122,13 @@ Options:
 
       --sandbox-enable-networking
           Enable network access in the sandbox container
+
+      --env <ENV>
+          Environment variable to pass to `cargo check`, as `NAME=value`
+          (ie `--env FOO=bar --env ANOTHER=value`)
+          
+          By default this also attempts to find `.cargo/config.toml`s
+          and add their environment variables as well.
 
   -m, --major
           Do major updates (this edits `Cargo.toml` files)
@@ -147,7 +154,7 @@ Options:
           For `--major`, this concatenates the templates for the minor updates,
           and then the major update template per major update.
 
-  -t, --templated-as-squashed
+      --templated-as-squashed
           Same as `--templated`,
           but use the squashed template format by taking a diff over all changes
 

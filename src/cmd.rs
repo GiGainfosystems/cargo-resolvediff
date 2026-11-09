@@ -112,9 +112,21 @@ impl<'a> Command<'a> {
                     cmd.arg(i);
                 }
                 CommandBackend::Sandboxed(cmd) => {
-                    self.backend = CommandBackend::Sandboxed(cmd.arg(i))
+                    self.backend = CommandBackend::Sandboxed(cmd.arg(i));
                 }
             };
+        }
+        self
+    }
+
+    pub fn env<T: AsRef<OsStr> + Into<OsString>>(mut self, key: T, value: T) -> Self {
+        match self.backend {
+            CommandBackend::Normal(ref mut cmd) => {
+                cmd.env(key, value);
+            }
+            CommandBackend::Sandboxed(cmd) => {
+                self.backend = CommandBackend::Sandboxed(cmd.env(key, value));
+            }
         }
         self
     }
